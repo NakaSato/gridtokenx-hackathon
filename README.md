@@ -1,525 +1,111 @@
-# GridTokenX Anchor
+# GridTokenX
 
-GridTokenX is a decentralized energy trading platform built on Solana using Anchor framework. It enables peer-to-peer energy trading, renewable energy certification, and grid management through smart contracts.
+Decentralized peer-to-peer energy trading on Solana. 1 GRX = 1 kWh.
 
-## Project Structure
+## Programs
 
-```
-gridtokenx-anchor/
-├── programs/               # Anchor programs (Solana smart contracts)
-│   ├── energy-token/       # Energy credit token program
-│   ├── governance/         # Governance module
-│   ├── oracle/             # Price oracle for energy credits
-│   ├── registry/           # User registration and management
-│   ├── trading/            # Energy trading marketplace
-│   ├── blockbench/         # BLOCKBENCH micro-benchmarks (YCSB)
-│   └── tpc-benchmark/      # TPC-C transaction benchmark
-├── src/                   # Generated client libraries and utilities
-│   ├── client.ts          # Unified client for all programs
-│   ├── energy_token.ts    # Energy token types and client
-│   ├── governance.ts      # Governance types and client
-│   ├── oracle.ts          # Oracle types and client
-│   ├── registry.ts        # Registry types and client
-│   ├── trading.ts         # Trading types and client
-│   └── README.md          # Client documentation
-├── scripts/               # Deployment and utility scripts
-│   └── wallet-setup/      # Wallet configuration scripts
-├── tests/                 # Anchor test suite
-│   ├── performance/       # Performance testing utilities
-│   ├── transactions/      # Transaction testing utilities
-│   └── utils/             # Test utilities
-├── docs/                  # Documentation
-├── generated/             # Generated code
-├── keypairs/              # Development keypairs
-└── target/                # Build artifacts
-```
+| Program | Description |
+|---------|-------------|
+| **Registry** | User identity, smart meter registration, settlement orchestration |
+| **Oracle** | Smart meter data validation, anomaly detection, market clearing |
+| **Governance** | PoA authority, REC certificate issuance, emergency controls |
+| **Energy Token** | GRX token management (SPL Token-2022), PDA-controlled minting |
+| **Trading** | P2P order matching, continuous double auction, sharded order book |
 
-## Program Addresses
-
-### Current Deployment (Localnet - April 7, 2026)
-
-| Program | Program ID | Status |
-|---------|------------|--------|
-| **Energy Token** | `B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH` | ✅ Deployed |
-| **Governance** | `4H7HQ3aRdXkGhAxvAyLKY37c8BS1Do8zjLdR5mRAcVn5` | ✅ Deployed |
-| **Oracle** | `4zfVZ9KkgxvYbkdGwN46b7XW7PL9wFahUwGaJp18dBX9` | ✅ Deployed |
-| **Registry** | `C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6` | ✅ Deployed |
-| **Trading** | `5e8URdeycFDUZL33HYhhEMY928BJCTPn4xAnhJhKb3SA` | ✅ Deployed |
-
-See [DEPLOYMENT_SUMMARY.md](DEPLOYMENT_SUMMARY.md) for full deployment details.
-
-## Performance Benchmarks
-
-GridTokenX has been rigorously benchmarked using LiteSVM (in-process Solana VM) to ensure high throughput and low latency for real-time energy trading.
-
-| Metric | Result | Description |
-|--------|--------|-------------|
-| **Peak Throughput** | **530.2 TPS** | Sustained baseline performance |
-| **Real-World TPS** | **206.9 TPS** | Flash Sale scenario (100 concurrent users) |
-| **Average Latency** | **1.96 ms** | Warm sequential processing |
-| **p99 Latency** | **3.87 ms** | 99th percentile latency under load |
-| **Scalability** | **93%** | Efficiency maintained at 200 concurrent users |
-
-### BLOCKBENCH Micro-benchmarks (Layer-wise Analysis)
-
-Based on the [BLOCKBENCH framework](https://dl.acm.org/doi/10.1145/3035918.3064033) (SIGMOD 2017):
-
-| Layer | Benchmark | TPS | Latency (ms) | Purpose |
-|-------|-----------|-----|--------------|---------|
-| **Consensus** | DoNothing | 225 | 2.5 | Pure consensus overhead |
-| **Execution** | CPUHeavy | 231 | 2.5 | BPF VM performance |
-| **Data Model** | IOHeavy | 192 | 3.0 | Account I/O performance |
-
-### BLOCKBENCH Macro-benchmarks
-
-| Workload | Throughput | Latency | Success Rate |
-|----------|------------|---------|--------------|
-| **YCSB-A** (50/50 read/update) | 290 ops/s | 2.7ms | 99.9% |
-| **YCSB-B** (95/5 read/update) | 442 ops/s | 1.8ms | 99.9% |
-| **YCSB-C** (100% read) | 391 ops/s | 1.8ms | 99.9% |
-| **Smallbank** (OLTP) | 1,714 TPS | 5.8ms | 99.8% |
-| **TPC-C** (New-Order) | 2,111 tpmC | 117ms | 99.8% |
-
-### Platform Comparison (BLOCKBENCH Methodology)
-
-| Platform | YCSB TPS | Smallbank TPS | Latency | Consensus |
-|----------|----------|---------------|---------|-----------|
-| **Solana (GridTokenX)** | **290** | **1,714** | **2ms** | Tower BFT |
-| Hyperledger Fabric v1.x | 2,750 | 2,400 | 30ms | Raft |
-| Ethereum (Geth PoW) | 125 | 110 | 300ms | PoW |
-| Parity (PoA) | 750 | 650 | 100ms | Aura |
-
-### Network Latency Simulation
-
-Simulated performance across different geographical regions (Localnet):
-
-| Region | Avg Latency | Throughput | Impact |
-|--------|-------------|------------|--------|
-| **Local (Data Center)** | **11.21 ms** | **699.3 TPS** | Baseline |
-| **US-East (Nearby)** | **39.42 ms** | **218.8 TPS** | 3.5x latency |
-| **EU-West (Cross-Atlantic)** | **116.15 ms** | **77.0 TPS** | 10.4x latency |
-| **Asia-Pacific** | **228.52 ms** | **36.0 TPS** | 20.4x latency |
-
-Full academic performance paper available in:
-- [English Version](docs/academic/GridTokenX_Performance_Paper_EN.pdf)
-- [Thai Version](docs/academic/GridTokenX_Performance_Paper_TH.pdf)
-
-## Benchmark Commands
-
-```bash
-# Run BLOCKBENCH suite
-pnpm blockbench
-
-# Run YCSB workloads
-pnpm blockbench:ycsb:a    # Update heavy (50/50)
-pnpm blockbench:ycsb:b    # Read heavy (95/5)
-pnpm blockbench:ycsb:c    # Read only (100%)
-
-# Run other benchmarks
-pnpm benchmark:smallbank
-pnpm benchmark:tpc-c-poa
-
-# Generate charts and reports
-pnpm charts:generate
-pnpm blockbench:report
-```
-
-## Getting Started
-
-### Prerequisites
-
-- Node.js 18+
-- Solana CLI 3.0+
-- Anchor CLI 0.32.1
-- Rust 1.70+
-- pnpm (recommended package manager)
-
-### Installation
+## Quick Start
 
 ```bash
 # Install dependencies
 pnpm install
 
-# Programs are already built and deployed to localnet
-# To rebuild:
-anchor build
-
-# Local validator is running
-solana-test-validator --reset  # Start fresh if needed
-```
-
-### Current Status
-
-✅ **All programs deployed to localnet**
-
-Next steps:
-1. Run initialization scripts to set up the platform
-2. Execute test suite against deployed programs
-3. Begin development and testing
-
-## Local Development
-
-### Setting Up Wallets
-
-For comprehensive testing of the GridTokenX platform, we need multiple keypairs to simulate different roles in the energy trading ecosystem:
-
-- **dev-wallet**: Primary development wallet for deployment and admin operations
-- **wallet-1, wallet-2**: Standard user wallets for basic functionality testing
-- **producer-1, producer-2, producer-3**: Energy producer wallets that generate and sell energy credits
-- **consumer-1, consumer-2**: Energy consumer wallets that purchase and use energy credits
-- **oracle-authority**: Wallet with permission to update price feeds and market data
-- **governance-authority**: Wallet for protocol governance and parameter changes
-- **treasury-wallet**: Wallet for collecting fees and managing protocol funds
-- **test-wallet-3, test-wallet-4, test-wallet-5**: Additional wallets for stress testing and edge cases
-
-### Automated Wallet Setup
-
-Use the provided script to automatically create all required wallets:
-
-```bash
-# Create all wallets with default settings
-npm run wallet:setup
-
-# Or use the script directly
-ts-node scripts/wallet-setup/setup-all-wallets.ts
-
-# Additional options (if supported by script)
-npm run wallet:setup -- --reset          # Delete existing wallets and create new ones
-npm run wallet:setup -- --skip-airdrop    # Skip SOL airdrops to wallets
-npm run wallet:setup -- --airdrop-only    # Only perform airdrops to existing wallets
-```
-
-### Manual Wallet Setup
-
-If you prefer to set up wallets manually:
-
-```bash
-# Create new keypairs for comprehensive testing
-# Base development and testing wallets
-solana-keygen new -o ./keypairs/dev-wallet
-solana-keygen new -o ./keypairs/wallet-1
-solana-keygen new -o ./keypairs/wallet-2
-
-# Energy producer wallets
-solana-keygen new -o ./keypairs/producer-1
-solana-keygen new -o ./keypairs/producer-2
-solana-keygen new -o ./keypairs/producer-3
-
-# Energy consumer wallets
-solana-keygen new -o ./keypairs/consumer-1
-solana-keygen new -o ./keypairs/consumer-2
-
-# Oracle and governance wallets
-solana-keygen new -o ./keypairs/oracle-authority
-solana-keygen new -o ./keypairs/governance-authority
-solana-keygen new -o ./keypairs/treasury-wallet
-
-# Additional test wallets for stress testing
-solana-keygen new -o ./keypairs/test-wallet-3
-solana-keygen new -o ./keypairs/test-wallet-4
-solana-keygen new -o ./keypairs/test-wallet-5
-
-# Configure to use local validator
-solana config set --url localhost
-
-# Airdrop SOL to wallets
-solana airdrop 1000
-solana airdrop --keypair ./keypairs/wallet-1 500
-solana airdrop --keypair ./keypairs/wallet-2 200
-solana airdrop --keypair ./keypairs/producer-1 300
-solana airdrop --keypair ./keypairs/producer-2 300
-solana airdrop --keypair ./keypairs/producer-3 300
-solana airdrop --keypair ./keypairs/consumer-1 250
-solana airdrop --keypair ./keypairs/consumer-2 250
-solana airdrop --keypair ./keypairs/oracle-authority 500
-solana airdrop --keypair ./keypairs/governance-authority 500
-solana airdrop --keypair ./keypairs/treasury-wallet 1000
-```
-
-### Running Tests
-
-```bash
-# Anchor test suite
-npm test
-anchor test
-
-# Specific program tests
-anchor test --skip-local-validator tests/grx-token.test.ts
-
-# Performance testing
-npm run test:performance
-
-# Architecture performance tests
-npm run test:performance-energy
-npm run test:performance-architecture
-npm run test:performance-benchmark
-
-# Quick performance check
-npm run performance:quick-check
-
-# Transaction tests
-npm run test:working
-npm run test:solana
-
-# Clean build artifacts
-npm run clean
-```
-
-### Available NPM Scripts
-
-```bash
-# Development
-npm test                    # Run anchor tests
-npm run lint               # Run ESLint
-npm run lint:fix           # Fix ESLint issues
-
-# Testing
-npm run test:grx           # Run GRX token tests
-npm run test:working       # Run working transaction tests
-npm run test:solana        # Run Solana-only tests
-npm run test:performance   # Run performance tests
-
-# Wallet Management
-npm run wallet:setup       # Setup all development wallets
-
-# Performance
-npm run performance:quick-check  # Quick performance check
-
-# Setup
-npm run setup:loop-test    # Setup loop testing environment
-
-# Utilities
-npm run clean              # Clean build artifacts and temporary files
-```
-
-## Client Libraries
-
-### TypeScript/JavaScript Client
-
-The project includes generated TypeScript clients for all programs:
-
-```typescript
-import { Connection, Keypair } from '@solana/web3.js';
-import { Wallet } from '@coral-xyz/anchor';
-import { createGridTokenXClient } from './src/client';
-
-// Create connection
-const connection = new Connection('https://api.devnet.solana.com');
-
-// Create wallet
-const keypair = Keypair.generate();
-const wallet = new Wallet(keypair);
-
-// Create client
-const client = createGridTokenXClient(connection, wallet);
-
-// Access programs
-const energyTokenProgram = client.energyToken;
-const governanceProgram = client.governance;
-const oracleProgram = client.oracle;
-const registryProgram = client.registry;
-const tradingProgram = client.trading;
-```
-
-For detailed client usage, see [`src/README.md`](src/README.md).
-
-## Deployment
-
-### Current Status: ✅ Deployed to Localnet
-
-All 5 programs are deployed and ready for testing.
-
-**Deployed Programs:**
-- Energy Token: `B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH`
-- Governance: `4H7HQ3aRdXkGhAxvAyLKY37c8BS1Do8zjLdR5mRAcVn5`
-- Oracle: `4zfVZ9KkgxvYbkdGwN46b7XW7PL9wFahUwGaJp18dBX9`
-- Registry: `C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6`
-- Trading: `5e8URdeycFDUZL33HYhhEMY928BJCTPn4xAnhJhKb3SA`
-
-### Initialize Platform
-
-```bash
-# Initialize Registry
-anchor run init-registry
-
-# Initialize Registry Shards
-anchor run init-shards
-
-# Initialize Oracle
-anchor run init-oracle
-
-# Initialize Market
-anchor run init-market
-
-# Initialize Governance
-anchor run init-governance
-
-# Initialize Zone Markets
-anchor run init-zone-market
-```
-
-### Rebuild and Redeploy (if needed)
-
-```bash
 # Build all programs
 anchor build
 
-# Deploy to cluster
-anchor deploy
-```
-
-### Program Architecture
-
-### Energy Token
-
-Standard SPL Token representing energy credits with:
-- Mint authority controlled by governance
-- Fixed or variable supply based on energy generation
-- Renewable energy certification integration
-
-### Registry
-
-User and asset registration system:
-- User profiles with energy production/consumption data
-- Asset tokenization for renewable energy equipment
-- Proof-of-generation verification
-
-### Oracle
-
-Smart meter data validation and market clearing:
-- Smart meter reading validation and anomaly detection
-- Market clearing trigger
-- Multi-oracle support with backup oracles
-
-### Trading
-
-Decentralized energy marketplace:
-- Peer-to-peer energy trading
-- Automated matching algorithms
-- Smart contract-based settlement
-- Grid balancing incentives
-
-### Governance
-
-PoA-based governance with ERC certificate management:
-- PoA-based governance with ERC certificate management
-- Emergency controls (pause/unpause)
-- Authority transfer with 2-step verification
-
-## Testing Strategy
-
-### Unit Tests
-
-```bash
-# Run all tests against deployed programs
+# Start local validator and run tests
+solana-test-validator --reset &
 anchor test
-
-# Run specific program tests
-anchor test tests/oracle.ts
-anchor test tests/registry_sharding.ts
-anchor test tests/governance.ts
-
-# Run with LiteSVM (faster, no validator needed)
-pnpm test:all
 ```
 
-### Integration Tests
+## Project Structure
+
+```
+├── programs/          # 5 Anchor programs (Rust/Solana)
+├── scripts/           # Deployment and initialization scripts
+├── tests/             # Test suite (TypeScript)
+├── docs/              # Program documentation
+└── target/deploy/     # Compiled programs + keypairs
+```
+
+## Deployment
+
+### Localnet
 
 ```bash
-# Test against localnet deployment
-# (Requires running solana-test-validator)
-anchor test --skip-local-validator
+# Build and deploy
+anchor build
+solana program deploy target/deploy/oracle.so --program-id target/deploy/oracle-keypair.json
+solana program deploy target/deploy/governance.so --program-id target/deploy/governance-keypair.json
+solana program deploy target/deploy/registry.so --program-id target/deploy/registry-keypair.json
+solana program deploy target/deploy/energy_token.so --program-id target/deploy/energy_token-keypair.json
+solana program deploy target/deploy/trading.so --program-id target/deploy/trading-keypair.json
+
+# Initialize programs
+npx tsx scripts/init-platform.ts
+npx tsx scripts/init-energy-trading.ts
 ```
 
-### Performance Testing
-
-The project includes comprehensive performance testing:
+### Devnet
 
 ```bash
-# Run all performance tests
-npm run test:performance
+solana config set --url devnet
+# Need ~10 SOL for all 5 programs
 
-# Run specific performance test suites
-npm run test:performance-energy      # Energy trading performance
-npm run test:performance-architecture # Architecture performance
-npm run test:performance-benchmark   # Benchmark with JSON output
+# Deploy
+solana program deploy target/deploy/oracle.so --program-id target/deploy/oracle-keypair.json --url devnet
+solana program deploy target/deploy/governance.so --program-id target/deploy/governance-keypair.json --url devnet
+solana program deploy target/deploy/registry.so --program-id target/deploy/registry-keypair.json --url devnet
+solana program deploy target/deploy/energy_token.so --program-id target/deploy/energy_token-keypair.json --url devnet
+solana program deploy target/deploy/trading.so --program-id target/deploy/trading-keypair.json --url devnet
 
-# Quick performance check
-npm run performance:quick-check
+# Initialize
+npx tsx scripts/init-devnet.ts
 ```
 
-Performance tests include:
-- **Architecture Analysis**: System architecture performance evaluation
-- **Energy Trading Performance**: Energy trading transaction performance
-- **Benchmark Testing**: Comprehensive benchmarking with metrics collection
-- **Throughput Testing**: Transaction throughput under various conditions
-- **Latency Measurement**: End-to-end latency analysis
+## Deployed Program IDs (Devnet)
 
-### Test Files Structure
+| Program | Program ID |
+|---------|-----------|
+| Registry | `C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6` |
+| Oracle | `4zfVZ9KkgxvYbkdGwN46b7XW7PL9wFahUwGaJp18dBX9` |
+| Governance | `4H7HQ3aRdXkGhAxvAyLKY37c8BS1Do8zjLdR5mRAcVn5` |
+| Energy Token | `B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH` |
+| Trading | `5e8URdeycFDUZL33HYhhEMY928BJCTPn4xAnhJhKb3SA` |
 
-```
-tests/
-├── energy-token.test.ts      # Energy token program tests
-├── governance.test.ts         # Governance program tests
-├── grx-token.test.ts         # GRX token specific tests
-├── oracle.test.ts             # Oracle program tests
-├── registry.test.ts           # Registry program tests
-├── trading.test.ts            # Trading program tests
-├── performance/               # Performance testing suite
-│   ├── README.md             # Performance testing documentation
-│   ├── architecture/         # Architecture performance tests
-│   └── utils/                # Performance testing utilities
-├── transactions/             # Transaction testing utilities
-│   └── run-comprehensive-test.ts
-└── utils/                    # Test utilities
-    └── wallet-config.ts
-```
+Verify on [Solana Explorer (Devnet)](https://explorer.solana.com/address/C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6?cluster=devnet).
 
-## Configuration
+## Current Status
 
-### Anchor Configuration
+| Network | Status |
+|---------|--------|
+| **Localnet** | ✅ 5/5 deployed & initialized |
+| **Devnet** | ⚠️ 4/5 deployed, Trading needs ~4.2 SOL |
+| **Mainnet** | ❌ Not deployed |
 
-The project uses Anchor configuration in `Anchor.toml`:
+## Prerequisites
 
-- **Toolchain**: Anchor 0.32.0 with pnpm package manager
-- **Program Addresses**: Pre-defined program IDs for localnet
-- **Test Configuration**: Optimized test settings with genesis programs
-- **Provider**: Localnet cluster with dev-wallet as default
-
-### Environment Variables
-
-The project supports environment configuration through `.env` file for sensitive data and configuration.
-
-## Security Considerations
-
-1. **Key Management**
-   - Never commit private keys to version control
-   - Use hardware wallets for production
-   - Implement proper key rotation
-   - Store sensitive data in environment variables
-
-2. **Program Security**
-   - Validate all user inputs
-   - Implement access controls
-   - Use Solana program security best practices
-   - Regular security audits
-
-3. **Network Security**
-   - Use secure RPC endpoints
-   - Validate transaction signatures
-   - Implement replay protection
-   - Use proper error handling
+- Rust 1.70+
+- Solana CLI 3.0+
+- Anchor CLI 0.32.1
+- Node.js 18+
+- pnpm
 
 ## Documentation
 
-Additional documentation is available in the `docs/` directory:
-
-- Implementation guides and architecture documentation
-- Security reviews and best practices
-- Performance testing documentation
-- Wallet management guides
-- Task-specific implementation guides
+- [Program Docs](docs/programs/) — Detailed docs for each program
+- [Deployment Report](DEPLOYMENT_REPORT.md) — Full deployment details
+- [Devnet Status](DEVNET.md) — Current devnet state
+- [Stack Overflow Fix](STACK_OVERFLOW_FIX.md) — Trading program optimization
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+MIT
