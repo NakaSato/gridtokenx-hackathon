@@ -36,13 +36,17 @@ gridtokenx-anchor/
 
 ## Program Addresses
 
-- **Energy Token**: `5DJCWKo5cXt3PXRsrpH1xixra4wXWbNzxZ1p4FHqSxvi`
-- **Governance**: `8bNpJqZoqqUWKu55VWhR8LWS66BX7NPpwgYBAKhBzu2L`
-- **Oracle**: `EkcPD2YEXhpo1J73UX9EJNnjV2uuFS8KXMVLx9ybqnhU`
-- **Registry**: `CXXRVpEwyd2ch7eo425mtaBfr2Yi1825Nm6yik2NEWqR`
-- **Trading**: `8S2e2p4ghqMJuzTz5AkAKSka7jqsjgBH7eWDcCHzXPND`
-- **BLOCKBENCH**: `9sz5rrCnWTLqPeQVuyJgyQ1hqLGXrT94GLfVVoWUKpxz`
-- **TPC-Benchmark**: `Gn99qZgnpwNXsQaBB7zvyycnRJmMGaQ4UaG5PpvBsmEu`
+### Current Deployment (Localnet - April 7, 2026)
+
+| Program | Program ID | Status |
+|---------|------------|--------|
+| **Energy Token** | `B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH` | ✅ Deployed |
+| **Governance** | `4H7HQ3aRdXkGhAxvAyLKY37c8BS1Do8zjLdR5mRAcVn5` | ✅ Deployed |
+| **Oracle** | `4zfVZ9KkgxvYbkdGwN46b7XW7PL9wFahUwGaJp18dBX9` | ✅ Deployed |
+| **Registry** | `C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6` | ✅ Deployed |
+| **Trading** | `5e8URdeycFDUZL33HYhhEMY928BJCTPn4xAnhJhKb3SA` | ✅ Deployed |
+
+See [DEPLOYMENT_SUMMARY.md](DEPLOYMENT_SUMMARY.md) for full deployment details.
 
 ## Performance Benchmarks
 
@@ -125,8 +129,8 @@ pnpm blockbench:report
 ### Prerequisites
 
 - Node.js 18+
-- Solana CLI 1.18+
-- Anchor CLI 0.32.0
+- Solana CLI 3.0+
+- Anchor CLI 0.32.1
 - Rust 1.70+
 - pnpm (recommended package manager)
 
@@ -136,15 +140,22 @@ pnpm blockbench:report
 # Install dependencies
 pnpm install
 
-# Build programs
+# Programs are already built and deployed to localnet
+# To rebuild:
 anchor build
 
-# Start local validator
-solana-test-validator --reset
-
-# Run tests
-anchor test
+# Local validator is running
+solana-test-validator --reset  # Start fresh if needed
 ```
+
+### Current Status
+
+✅ **All programs deployed to localnet**
+
+Next steps:
+1. Run initialization scripts to set up the platform
+2. Execute test suite against deployed programs
+3. Begin development and testing
 
 ## Local Development
 
@@ -314,14 +325,47 @@ For detailed client usage, see [`src/README.md`](src/README.md).
 
 ## Deployment
 
-### Building Programs
+### Current Status: ✅ Deployed to Localnet
+
+All 5 programs are deployed and ready for testing.
+
+**Deployed Programs:**
+- Energy Token: `B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH`
+- Governance: `4H7HQ3aRdXkGhAxvAyLKY37c8BS1Do8zjLdR5mRAcVn5`
+- Oracle: `4zfVZ9KkgxvYbkdGwN46b7XW7PL9wFahUwGaJp18dBX9`
+- Registry: `C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6`
+- Trading: `5e8URdeycFDUZL33HYhhEMY928BJCTPn4xAnhJhKb3SA`
+
+### Initialize Platform
+
+```bash
+# Initialize Registry
+anchor run init-registry
+
+# Initialize Registry Shards
+anchor run init-shards
+
+# Initialize Oracle
+anchor run init-oracle
+
+# Initialize Market
+anchor run init-market
+
+# Initialize Governance
+anchor run init-governance
+
+# Initialize Zone Markets
+anchor run init-zone-market
+```
+
+### Rebuild and Redeploy (if needed)
 
 ```bash
 # Build all programs
 anchor build
 
-# Build specific program
-anchor build --program-name governance
+# Deploy to cluster
+anchor deploy
 ```
 
 ### Program Architecture
@@ -367,14 +411,24 @@ PoA-based governance with ERC certificate management:
 ### Unit Tests
 
 ```bash
-# Run all tests
+# Run all tests against deployed programs
 anchor test
 
-# Run specific test
-anchor test --skip-local-validator
+# Run specific program tests
+anchor test tests/oracle.ts
+anchor test tests/registry_sharding.ts
+anchor test tests/governance.ts
 
-# Test with coverage
-anchor test --skip-deploy
+# Run with LiteSVM (faster, no validator needed)
+pnpm test:all
+```
+
+### Integration Tests
+
+```bash
+# Test against localnet deployment
+# (Requires running solana-test-validator)
+anchor test --skip-local-validator
 ```
 
 ### Performance Testing

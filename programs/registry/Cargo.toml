@@ -1,0 +1,31 @@
+[package]
+name = "registry"
+version = "0.1.1"
+description = "Registry program for P2P Energy Trading - User and meter management"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "registry"
+
+[features]
+default = []
+localnet = ["compute-debug/localnet"]
+cpi = ["no-entrypoint"]
+no-entrypoint = []
+anchor-debug = []
+custom-heap = []
+custom-panic = []
+no-idl = []
+no-log-ix-name = []
+idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
+
+[dependencies]
+anchor-lang = { workspace = true }
+anchor-spl = { workspace = true }
+base64 = { workspace = true }
+bytemuck = { version = "1.20.0", features = ["derive"] }
+compute-debug = { path = "../../shared/compute-debug", optional = true }
+
+# Add energy-token program for CPI
+energy-token = { path = "../energy-token", features = ["cpi"] }

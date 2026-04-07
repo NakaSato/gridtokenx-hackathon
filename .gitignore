@@ -1,0 +1,92 @@
+# ===========================================
+# GridTokenX - Git Ignore for Deployment
+# ===========================================
+
+# Build Artifacts
+docker-target/
+target/
+**/*.rs.bk
+*.pdb
+*.wasm
+*.bin
+*.so
+
+# Anchor
+.anchor/
+
+# Dependencies
+node_modules/
+dist/
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+.pnpm-debug.log*
+logs/
+
+# Environment Variables
+.env
+.env.local
+.env.*.local
+
+# IDE and Editor Files
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+*.sublime-workspace
+*.sublime-project
+.eslintcache
+
+# OS Files
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Test Artifacts
+test-ledger/
+.ledger/
+test-results/
+tests/test-results/
+coverage/
+.nyc_output/
+*.benchmark.json
+*.benchmark.csv
+
+# TypeScript
+*.tsbuildinfo
+
+# Rust
+Cargo.lock
+
+# Temporary Files
+tmp/
+temp/
+.cache/
+
+# Generated Clients
+src/client/
+**/generated/
+
+# Development Keypairs
+/keypairs/
+/debug/**
+
+# Process Files
+*.pid
+
+# Archives
+*.tgz
+*.tar.gz
+
+# AI Assistant Directories
+.agents/
+.goose/
+.qwen/
