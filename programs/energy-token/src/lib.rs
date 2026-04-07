@@ -54,12 +54,13 @@ pub mod energy_token {
 
     /// Add metadata to an existing GRX token mint via Metaplex
     /// Must be called after initialize_token with the same mint address
-    pub fn create_token_mint(
-        ctx: Context<CreateTokenMint>,
-        name: String,
-        symbol: String,
-        uri: String,
-    ) -> Result<()> {
+    /// If called with no args, uses default GRX metadata
+    pub fn create_token_mint(ctx: Context<CreateTokenMint>) -> Result<()> {
+        // Default GRX token metadata
+        let name = String::from("GridTokenX");
+        let symbol = String::from("GRX");
+        let uri = String::from("https://gridtokenx.com/metadata/grx.json");
+        
         compute_fn!("create_token_mint" => {
             // Logging disabled to save CU
 

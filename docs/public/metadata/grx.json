@@ -1,0 +1,17 @@
+{
+  "name": "GridTokenX",
+  "symbol": "GRX",
+  "description": "Decentralized peer-to-peer energy trading token. 1 GRX = 1 kWh of verified renewable energy.",
+  "image": "https://gridtokenx.com/assets/grx-token.png",
+  "attributes": [
+    { "trait_type": "Token Type", "value": "Energy Credit" },
+    { "trait_type": "Backing", "value": "1 GRX = 1 kWh" },
+    { "trait_type": "Standard", "value": "SPL Token-2022" },
+    { "trait_type": "Decimals", "value": "9" },
+    { "trait_type": "Network", "value": "Solana" }
+  ],
+  "properties": {
+    "category": "token",
+    "creators": []
+  }
+}

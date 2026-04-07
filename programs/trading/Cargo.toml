@@ -17,7 +17,6 @@ custom-heap = []
 no-idl = []
 no-log-ix-name = []
 idl-build = ["anchor-lang/idl-build", "anchor-spl/idl-build"]
-localnet = ["compute-debug/localnet", "test-skip-zk"]
 test-skip-zk = []
 
 [dependencies]
@@ -36,6 +35,5 @@ hmac = "0.12"
 base64 = { workspace = true }
 hex = "0.4"
 bytemuck = { version = "1.16", features = ["derive"] }
-compute-debug = { path = "../../shared/compute-debug", optional = true }
 governance = { path = "../governance", features = ["cpi"] }
 solana-zk-token-sdk = "1.18.26"
