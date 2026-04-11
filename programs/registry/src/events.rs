@@ -43,6 +43,7 @@ pub struct MeterReadingUpdated {
 pub struct MeterBalanceSettled {
     pub meter_id: String,
     pub owner: Pubkey,
+    pub energy_wh: u64,
     pub tokens_to_mint: u64,
     pub total_settled: u64,
 }

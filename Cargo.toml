@@ -1,12 +1,14 @@
 [workspace]
 members = [
     "programs/energy-token",
-    "programs/governance",
-    "programs/oracle",
     "programs/registry",
     "programs/trading",
 ]
-exclude = ["programs/dependency-lock"]
+exclude = [
+    "programs/dependency-lock",
+    "programs/governance",
+    "programs/oracle",
+]
 resolver = "2"
 
 [workspace.dependencies]

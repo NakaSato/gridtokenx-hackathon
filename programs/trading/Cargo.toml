@@ -35,5 +35,4 @@ hmac = "0.12"
 base64 = { workspace = true }
 hex = "0.4"
 bytemuck = { version = "1.16", features = ["derive"] }
-governance = { path = "../governance", features = ["cpi"] }
 solana-zk-token-sdk = "1.18.26"

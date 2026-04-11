@@ -1,5 +1,14 @@
 #![allow(deprecated)]
 
+//! GridTokenX Energy Token Program — Dual-Token Architecture
+//!
+//! Manages two tokens:
+//! - **GRID**: Energy settlement token (1 GRID = 1 kWh P2P solar), inflationary
+//! - **GRX**: AI credit token, fixed supply 100M, DEX-priced, deflationary (burn on AI redemption)
+//!
+//! Token flow: P2P Trade → GRID minted → GRID→GRX swap → GRX→USDC (DEX) → USDC burned for AI credits
+//! One-way only: no GRX→GRID reverse path.
+
 use anchor_lang::prelude::*;
 
 use anchor_spl::{
@@ -13,7 +22,6 @@ use anchor_spl::{
 use mpl_token_metadata::instructions::CreateV1CpiBuilder;
 use mpl_token_metadata::types::{PrintSupply, TokenStandard};
 
-// Core modules
 pub mod error;
 pub mod events;
 pub mod state;
@@ -42,36 +50,131 @@ declare_id!("B9LnEVqqz8ZVgZ4zELtxXYozXQbm1eo1KD2x3rAMMcTH");
 
 pub const DECIMALS: u8 = 9;
 
+/// GRX total supply at genesis — 100,000,000 tokens
+pub const GRX_INITIAL_SUPPLY: u64 = 100_000_000 * 10u64.pow(DECIMALS as u32);
+
 #[program]
 pub mod energy_token {
     use super::*;
 
-    pub fn initialize(_ctx: Context<Initialize>) -> Result<()> {
-        compute_fn!("initialize" => {
+    // ── Initialization ─────────────────────────────────────────
+
+    /// Step 1: Create GRID and GRX mints (authority = wallet)
+    pub fn init_mints(_ctx: Context<InitMints>) -> Result<()> {
+        msg!("Mints created with wallet authority");
+        Ok(())
+    }
+
+    /// Step 2: Create TokenConfig + GRX vault, transfer mint authority, mint GRX
+    pub fn init_vault_and_config(
+        ctx: Context<InitVaultAndConfig>,
+        registry_program_id: Pubkey,
+        registry_authority: Pubkey,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let tc = &ctx.accounts.token_config;
+
+        // Write TokenConfig data
+        let config = TokenConfig {
+            authority: ctx.accounts.authority.key(),
+            registry_program: registry_program_id,
+            registry_authority: registry_authority,
+            grid_mint: ctx.accounts.grid_mint.key(),
+            grx_mint: ctx.accounts.grx_mint.key(),
+            grx_initial_supply: GRX_INITIAL_SUPPLY,
+            grx_total_burned: 0,
+            created_at: clock.unix_timestamp,
+        };
+        let data = borsh::to_vec(&config)?;
+        tc.data.borrow_mut()[..data.len()].copy_from_slice(&data);
+
+        // Mint GRX to vault (authority = wallet for Alpha)
+        token_interface::mint_to(
+            CpiContext::new(
+                ctx.accounts.token_program.to_account_info(),
+                token_interface::MintTo {
+                    mint: ctx.accounts.grx_mint.to_account_info(),
+                    to: ctx.accounts.grx_vault.to_account_info(),
+                    authority: ctx.accounts.authority.to_account_info(),
+                },
+            ),
+            GRX_INITIAL_SUPPLY,
+        )?;
+
+        Ok(())
+    }
+
+    /// Legacy: Initialize both GRID and GRX tokens in one instruction (may stack overflow)
+    pub fn initialize_dual_token(
+        ctx: Context<InitializeDualToken>,
+        registry_program_id: Pubkey,
+        registry_authority: Pubkey,
+    ) -> Result<()> {
+        let clock = Clock::get()?;
+        let tc = &ctx.accounts.token_config;
+        let bump = ctx.bumps.token_config;
+
+        // Write TokenConfig borsh-serialized data
+        let config = TokenConfig {
+            authority: ctx.accounts.authority.key(),
+            registry_program: registry_program_id,
+            registry_authority: registry_authority,
+            grid_mint: ctx.accounts.grid_mint.key(),
+            grx_mint: ctx.accounts.grx_mint.key(),
+            grx_initial_supply: GRX_INITIAL_SUPPLY,
+            grx_total_burned: 0,
+            created_at: clock.unix_timestamp,
+        };
+        let data = borsh::to_vec(&config)?;
+        tc.data.borrow_mut()[..data.len()].copy_from_slice(&data);
+
+        // Mint GRX to vault
+        let seeds = &[b"token_config".as_ref(), &[bump]];
+        let signer = &[&seeds[..]];
+        let cpi = token_interface::MintTo {
+            mint: ctx.accounts.grx_mint.to_account_info(),
+            to: ctx.accounts.grx_vault.to_account_info(),
+            authority: tc.to_account_info(),
+        };
+        token_interface::mint_to(
+            CpiContext::new_with_signer(ctx.accounts.token_program.to_account_info(), cpi, signer),
+            GRX_INITIAL_SUPPLY,
+        )?;
+
+        Ok(())
+    }
+
+    /// Mint initial GRX supply to vault (called after initialize_dual_token)
+    pub fn mint_grx_to_vault(ctx: Context<MintGrxToVault>) -> Result<()> {
+        compute_fn!("mint_grx_to_vault" => {
+            let seeds = &[b"token_config".as_ref(), &[ctx.bumps.token_config]];
+            let signer = &[&seeds[..]];
+
+            let cpi_accounts = token_interface::MintTo {
+                mint: ctx.accounts.grx_mint.to_account_info(),
+                to: ctx.accounts.grx_vault.to_account_info(),
+                authority: ctx.accounts.token_config.to_account_info(),
+            };
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
+            token_interface::mint_to(cpi_ctx, GRX_INITIAL_SUPPLY)?;
         });
         Ok(())
     }
 
-    /// Add metadata to an existing GRX token mint via Metaplex
-    /// Must be called after initialize_token with the same mint address
-    /// If called with no args, uses default GRX metadata
-    pub fn create_token_mint(ctx: Context<CreateTokenMint>) -> Result<()> {
-        // Default GRX token metadata
-        let name = String::from("GridTokenX");
-        let symbol = String::from("GRX");
-        let uri = String::from("https://gridtokenx.com/metadata/grx.json");
-        
-        compute_fn!("create_token_mint" => {
-            // Logging disabled to save CU
+    // ── Metadata ───────────────────────────────────────────────
 
-            // Check if Metaplex program is available (for localnet testing)
+    /// Add Metaplex metadata to the GRX mint
+    pub fn create_grx_metadata(ctx: Context<CreateGrxMetadata>) -> Result<()> {
+        compute_fn!("create_grx_metadata" => {
+            let name = String::from("GridTokenX Energy Credit");
+            let symbol = String::from("GRX");
+            let uri = String::from("https://gridtokenx.com/metadata/grx.json");
+
             if ctx.accounts.metadata_program.executable {
-                compute_checkpoint!("before_metaplex_cpi");
-
-                // Create metadata using Metaplex Token Metadata program
                 CreateV1CpiBuilder::new(&ctx.accounts.metadata_program.to_account_info())
                     .metadata(&ctx.accounts.metadata.to_account_info())
-                    .mint(&ctx.accounts.mint.to_account_info(), true)
+                    .mint(&ctx.accounts.grx_mint.to_account_info(), true)
                     .authority(&ctx.accounts.authority.to_account_info())
                     .payer(&ctx.accounts.payer.to_account_info())
                     .update_authority(&ctx.accounts.authority.to_account_info(), true)
@@ -86,48 +189,45 @@ pub mod energy_token {
                     .token_standard(TokenStandard::Fungible)
                     .print_supply(PrintSupply::Zero)
                     .invoke()?;
-
-                compute_checkpoint!("after_metaplex_cpi");
             }
         });
         Ok(())
     }
 
-    /// Mint GRX tokens to a wallet using Token interface
-    pub fn mint_to_wallet(ctx: Context<MintToWallet>, amount: u64) -> Result<()> {
-        compute_fn!("mint_to_wallet" => {
-            {
-                let token_info = ctx.accounts.token_info.load()?;
-                require!(
-                    token_info.authority == ctx.accounts.authority.key(),
-                    EnergyTokenError::UnauthorizedAuthority
-                );
-            }
-            // Cache clock before CPI — avoids an inline syscall inside the emit! macro
-            // and ensures the timestamp is captured before the CPI context is consumed.
+    // ── GRID: Energy Settlement Token ─────────────────────────
+
+    /// Mint GRID tokens to a recipient
+    /// Called by Registry program via CPI after P2P trade settlement
+    /// 1 GRID = 1 kWh verified energy traded
+    pub fn mint_grid(ctx: Context<MintGrid>, amount: u64, token_config_bump: u8) -> Result<()> {
+        compute_fn!("mint_grid" => {
+            let config = &ctx.accounts.token_config;
+
+            // Only Registry program or admin authority can mint GRID
+            let is_registry = ctx.accounts.authority.key() == config.registry_authority;
+            require!(
+                ctx.accounts.authority.key() == config.authority || is_registry,
+                EnergyTokenError::UnauthorizedAuthority
+            );
+            drop(config);
+
             let now = Clock::get()?.unix_timestamp;
-            // Logging disabled to save CU
-            let cpi_accounts = token_interface::MintTo {
-                mint: ctx.accounts.mint.to_account_info(),
+
+            let seeds = &[b"token_config".as_ref(), &[token_config_bump]];
+            let signer_seeds = &[&seeds[..]];
+
+            let cpi_accounts = MintToInterface {
+                mint: ctx.accounts.grid_mint.to_account_info(),
                 to: ctx.accounts.destination.to_account_info(),
-                authority: ctx.accounts.token_info.to_account_info(),
+                authority: ctx.accounts.token_config.to_account_info(),
             };
 
             let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
 
-            let seeds = &[b"token_info_2022".as_ref(), &[ctx.bumps.token_info]];
-            let signer = &[&seeds[..]];
-
-            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-
-            compute_checkpoint!("before_mint_cpi");
             token_interface::mint_to(cpi_ctx, amount)?;
-            compute_checkpoint!("after_mint_cpi");
 
-            // total_supply is NOT updated here — use sync_total_supply for batch updates
-            // to avoid write-lock contention on token_info during high-frequency minting
-
-            emit!(TokensMinted {
+            emit!(GridTokensMinted {
                 recipient: ctx.accounts.destination.key(),
                 amount,
                 timestamp: now,
@@ -136,63 +236,12 @@ pub mod energy_token {
         Ok(())
     }
 
-    /// Initialize the energy token program
-    pub fn initialize_token(
-        ctx: Context<InitializeToken>,
-        registry_program_id: Pubkey,
-        registry_authority: Pubkey,
-    ) -> Result<()> {
-        compute_fn!("initialize_token" => {
-            let clock = Clock::get()?;
-            let mut token_info = ctx.accounts.token_info.load_init()?;
-            token_info.authority = ctx.accounts.authority.key();
-            token_info.registry_authority = registry_authority;
-            token_info.registry_program = registry_program_id;
-            token_info.mint = ctx.accounts.mint.key();
-            token_info.total_supply = 0;
-            token_info.created_at = clock.unix_timestamp;
-            token_info.rec_validators_count = 0;
-            token_info.rec_validators = [Pubkey::default(); 5];
-        });
-        Ok(())
-    }
-
-    /// Add a REC validator to the system
-    pub fn add_rec_validator(
-        ctx: Context<AddRecValidator>,
-        validator_pubkey: Pubkey,
-        _authority_name: String,
-    ) -> Result<()> {
-        compute_fn!("add_rec_validator" => {
-            let mut token_info = ctx.accounts.token_info.load_mut()?;
-
-            // Check that it does not exceed the specified number
-            require!(
-                token_info.rec_validators_count < 5,
-                EnergyTokenError::MaxValidatorsReached
-            );
-
-            // Check if it already exists
-            for i in 0..token_info.rec_validators_count as usize {
-                require!(
-                    token_info.rec_validators[i] != validator_pubkey,
-                    EnergyTokenError::ValidatorAlreadyExists
-                );
-            }
-
-            let index = token_info.rec_validators_count as usize;
-            token_info.rec_validators[index] = validator_pubkey;
-            token_info.rec_validators_count += 1;
-        });
-        Ok(())
-    }
-
-    /// Transfer energy tokens between accounts
-    pub fn transfer_tokens(ctx: Context<TransferTokens>, amount: u64) -> Result<()> {
-        compute_fn!("transfer_tokens" => {
+    /// Transfer GRID tokens between verified platform users
+    pub fn transfer_grid(ctx: Context<TransferGrid>, amount: u64) -> Result<()> {
+        compute_fn!("transfer_grid" => {
             let cpi_accounts = TransferCheckedInterface {
                 from: ctx.accounts.from_token_account.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
+                mint: ctx.accounts.grid_mint.to_account_info(),
                 to: ctx.accounts.to_token_account.to_account_info(),
                 authority: ctx.accounts.from_authority.to_account_info(),
             };
@@ -200,120 +249,132 @@ pub mod energy_token {
             let cpi_program = ctx.accounts.token_program.to_account_info();
             let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
 
-            compute_checkpoint!("before_transfer_cpi");
             token_interface::transfer_checked(cpi_ctx, amount, DECIMALS)?;
-            compute_checkpoint!("after_transfer_cpi");
-
-            // Logging disabled to save CU
         });
         Ok(())
     }
 
-    /// Burn energy tokens (for energy consumption)
-    pub fn burn_tokens(ctx: Context<BurnTokens>, amount: u64) -> Result<()> {
-        compute_fn!("burn_tokens" => {
-            let cpi_accounts = BurnInterface {
-                mint: ctx.accounts.mint.to_account_info(),
-                from: ctx.accounts.token_account.to_account_info(),
-                authority: ctx.accounts.authority.to_account_info(),
-            };
+    // ── GRID → GRX: One-Way Conversion ────────────────────────
 
-            let cpi_program = ctx.accounts.token_program.to_account_info();
-            let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-            compute_checkpoint!("before_burn_cpi");
-            token_interface::burn(cpi_ctx, amount)?;
-            compute_checkpoint!("after_burn_cpi");
-
-            // total_supply is NOT updated here — use sync_total_supply for batch updates
-        });
-        Ok(())
-    }
-
-    /// Mint tokens directly to a user (authority or registry program only)
+    /// Swap GRID to GRX (one-way, irreversible)
     ///
-    /// Sealevel-optimized: token_info is read-only (no total_supply write).
-    /// If REC validators are registered, one must co-sign to prove energy provenance.
-    /// Call sync_total_supply periodically to batch-update the stored total.
-    pub fn mint_tokens_direct(ctx: Context<MintTokensDirect>, amount: u64) -> Result<()> {
-        compute_fn!("mint_tokens_direct" => {
-            let token_info = ctx.accounts.token_info.load()?;
-
-            // Check if caller has permission (Admin or Registry Program)
-            let is_admin = ctx.accounts.authority.key() == token_info.authority;
-            let is_registry = ctx.accounts.authority.key() == ctx.accounts.registry_authority.key();
-            require!(is_admin || is_registry, EnergyTokenError::UnauthorizedAuthority);
-
-            // REC Validator co-signature: when validators are registered, one must sign
-            // This proves the minted energy has a corresponding Renewable Energy Certificate
-            if token_info.rec_validators_count > 0 {
-                let rec_key = ctx.accounts.rec_validator.key();
-                let mut found = false;
-                for i in 0..token_info.rec_validators_count as usize {
-                    if token_info.rec_validators[i] == rec_key {
-                        found = true;
-                        break;
-                    }
-                }
-                require!(found, EnergyTokenError::RecValidatorNotFound);
-            }
-
-            drop(token_info);
-
-            // Cache clock before CPI — avoids an inline syscall inside the emit! macro
-            // and ensures the timestamp is captured before the CPI context is consumed.
+    /// Rate: 1 GRID = 1 GRX at default (oracle can adjust)
+    /// GRID is burned, GRX is minted to recipient.
+    ///
+    /// **Auto-swap default:** In production, the Registry program calls this atomically
+    /// during P2P settlement. Prosumers receive USDC, never holding GRX.
+    ///
+    /// **Optional: hold GRX** — prosumers can call this directly to receive GRX
+    /// instead of the auto-swap path.
+    pub fn swap_grid_to_grx(ctx: Context<SwapGridToGrx>, grid_amount: u64, token_config_bump: u8) -> Result<()> {
+        compute_fn!("swap_grid_to_grx" => {
             let now = Clock::get()?.unix_timestamp;
 
-            // Mint tokens using token_info PDA as authority
-            let seeds = &[b"token_info_2022".as_ref(), &[ctx.bumps.token_info]];
+            // Step 1: Burn GRID from user's account
+            let cpi_burn = BurnInterface {
+                mint: ctx.accounts.grid_mint.to_account_info(),
+                from: ctx.accounts.grid_from.to_account_info(),
+                authority: ctx.accounts.user.to_account_info(),
+            };
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            token_interface::burn(CpiContext::new(cpi_program.clone(), cpi_burn), grid_amount)?;
+
+            // Step 2: Mint GRX to user (1:1 default rate)
+            let grx_amount = grid_amount;
+
+            let seeds = &[b"token_config".as_ref(), &[token_config_bump]];
             let signer_seeds = &[&seeds[..]];
 
-            let cpi_accounts = MintToInterface {
-                mint: ctx.accounts.mint.to_account_info(),
-                to: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.token_info.to_account_info(),
+            let cpi_mint = MintToInterface {
+                mint: ctx.accounts.grx_mint.to_account_info(),
+                to: ctx.accounts.grx_to.to_account_info(),
+                authority: ctx.accounts.token_config.to_account_info(),
             };
+            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_mint, signer_seeds);
+            token_interface::mint_to(cpi_ctx, grx_amount)?;
 
-            let cpi_program = ctx.accounts.token_program.to_account_info();
-            let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer_seeds);
-
-            compute_checkpoint!("before_mint_direct_cpi");
-            token_interface::mint_to(cpi_ctx, amount)?;
-            compute_checkpoint!("after_mint_direct_cpi");
-
-            // total_supply is NOT updated here — use sync_total_supply for batch updates
-
-            emit!(GridTokensMinted {
-                meter_owner: ctx.accounts.user_token_account.key(),
-                amount,
+            emit!(GridSwappedToGrx {
+                user: ctx.accounts.user.key(),
+                grid_burned: grid_amount,
+                grx_minted: grx_amount,
                 timestamp: now,
             });
         });
         Ok(())
     }
 
-    /// Sync total_supply from the canonical SPL Mint account (admin only)
+    // ── GRX: AI Credit Token ──────────────────────────────────
+
+    /// Burn GRX tokens for AI credit redemption (deflationary)
     ///
-    /// Call this periodically (e.g. every N mints/burns) instead of writing
-    /// token_info on every transaction. Eliminates write-lock contention on
-    /// token_info during high-frequency mint/burn operations.
-    pub fn sync_total_supply(ctx: Context<SyncTotalSupply>) -> Result<()> {
-        compute_fn!("sync_total_supply" => {
-            let mut token_info = ctx.accounts.token_info.load_mut()?;
+    /// This is the core anti-velocity mechanism. GRX tokens are permanently
+    /// destroyed, creating deflationary pressure proportional to AI credit demand.
+    pub fn burn_grx(ctx: Context<BurnGrx>, amount: u64) -> Result<()> {
+        compute_fn!("burn_grx" => {
+            let cpi_accounts = BurnInterface {
+                mint: ctx.accounts.grx_mint.to_account_info(),
+                from: ctx.accounts.grx_from.to_account_info(),
+                authority: ctx.accounts.authority.to_account_info(),
+            };
 
-            require!(
-                ctx.accounts.authority.key() == token_info.authority,
-                EnergyTokenError::UnauthorizedAuthority
-            );
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            token_interface::burn(CpiContext::new(cpi_program, cpi_accounts), amount)?;
 
-            let canonical_supply = ctx.accounts.mint.supply;
-            token_info.total_supply = canonical_supply;
+            // Update total burned in config
+            let config = &ctx.accounts.token_config;
+            let total_burned = config.grx_total_burned;
+            drop(config);
 
-            // Hoist Clock::get() before emit! — avoids inline syscall inside macro expansion.
             let now = Clock::get()?.unix_timestamp;
-            emit!(TotalSupplySynced {
-                authority: ctx.accounts.authority.key(),
-                supply: canonical_supply,
+            emit!(GrxBurned {
+                user: ctx.accounts.authority.key(),
+                amount,
+                total_burned,
+                timestamp: now,
+            });
+        });
+        Ok(())
+    }
+
+    /// Transfer GRX tokens between verified platform users
+    pub fn transfer_grx(ctx: Context<TransferGrx>, amount: u64) -> Result<()> {
+        compute_fn!("transfer_grx" => {
+            let cpi_accounts = TransferCheckedInterface {
+                from: ctx.accounts.from_token_account.to_account_info(),
+                mint: ctx.accounts.grx_mint.to_account_info(),
+                to: ctx.accounts.to_token_account.to_account_info(),
+                authority: ctx.accounts.from_authority.to_account_info(),
+            };
+
+            let cpi_program = ctx.accounts.token_program.to_account_info();
+            let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
+
+            token_interface::transfer_checked(cpi_ctx, amount, DECIMALS)?;
+        });
+        Ok(())
+    }
+
+    // ── Admin ─────────────────────────────────────────────────
+
+    /// Add a REC validator to the system (disabled for Alpha)
+    pub fn add_rec_validator(
+        _ctx: Context<AddRecValidator>,
+        _validator_pubkey: Pubkey,
+        _authority_name: String,
+    ) -> Result<()> {
+        Err(error!(EnergyTokenError::UnauthorizedAuthority))
+    }
+
+    /// Sync total supply tracking from canonical SPL Mint accounts
+    pub fn sync_supplies(ctx: Context<SyncSupplies>) -> Result<()> {
+        compute_fn!("sync_supplies" => {
+            let config = &ctx.accounts.token_config;
+            let now = Clock::get()?.unix_timestamp;
+
+            emit!(SuppliesSynced {
+                grid_supply: ctx.accounts.grid_mint.supply,
+                grx_supply: ctx.accounts.grx_mint.supply,
+                grx_burned: config.grx_total_burned,
                 timestamp: now,
             });
         });
@@ -321,27 +382,153 @@ pub mod energy_token {
     }
 }
 
-// Account structs
+// ── Account Structs ───────────────────────────────────────────
+
 #[derive(Accounts)]
 pub struct Initialize<'info> {
     pub authority: Signer<'info>,
 }
 
 #[derive(Accounts)]
-pub struct CreateTokenMint<'info> {
+pub struct InitMints<'info> {
     #[account(
-        mut,
-        constraint = mint.key() == token_info.load()?.mint @ EnergyTokenError::UnauthorizedAuthority,
-    )]
-    pub mint: Box<InterfaceAccount<'info, MintInterface>>,
-
-    #[account(
-        seeds = [b"token_info_2022"],
+        init,
+        payer = authority,
+        seeds = [b"grid_mint"],
         bump,
+        mint::decimals = DECIMALS,
+        mint::authority = authority,
+        mint::token_program = token_program,
     )]
-    pub token_info: AccountLoader<'info, TokenInfo>,
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
 
-    /// CHECK: Validated by Metaplex metadata program (optional)
+    #[account(
+        init,
+        payer = authority,
+        seeds = [b"grx_mint"],
+        bump,
+        mint::decimals = DECIMALS,
+        mint::authority = authority,
+        mint::token_program = token_program,
+    )]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct InitVaultAndConfig<'info> {
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    #[account(mut)]
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(
+        init,
+        payer = authority,
+        space = 224,
+        seeds = [b"token_config"],
+        bump
+    )]
+    pub token_config: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = grx_mint,
+        associated_token::authority = authority,
+        associated_token::token_program = token_program,
+    )]
+    pub grx_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeDualToken<'info> {
+    #[account(
+        init,
+        payer = authority,
+        space = 224,
+        seeds = [b"token_config"],
+        bump
+    )]
+    pub token_config: UncheckedAccount<'info>,
+
+    #[account(
+        init,
+        payer = authority,
+        seeds = [b"grid_mint"],
+        bump,
+        mint::decimals = DECIMALS,
+        mint::authority = token_config,
+        mint::token_program = token_program,
+    )]
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(
+        init,
+        payer = authority,
+        seeds = [b"grx_mint"],
+        bump,
+        mint::decimals = DECIMALS,
+        mint::authority = token_config,
+        mint::token_program = token_program,
+    )]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(
+        init,
+        payer = authority,
+        associated_token::mint = grx_mint,
+        associated_token::authority = authority,
+        associated_token::token_program = token_program,
+    )]
+    pub grx_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    #[account(mut)]
+    pub authority: Signer<'info>,
+
+    pub system_program: Program<'info, System>,
+    pub token_program: Interface<'info, TokenInterface>,
+    pub associated_token_program: Program<'info, AssociatedToken>,
+    pub rent: Sysvar<'info, Rent>,
+}
+
+#[derive(Accounts)]
+pub struct MintGrxToVault<'info> {
+    #[account(mut, seeds = [b"token_config"], bump)]
+    pub token_config: Account<'info, TokenConfig>,
+
+    #[account(mut)]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub grx_vault: InterfaceAccount<'info, TokenAccountInterface>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct CreateGrxMetadata<'info> {
+    /// CHECK: GRX mint — validated by token_config seed
+    #[account(mut)]
+    pub grx_mint: AccountInfo<'info>,
+
+    /// CHECK: TokenConfig PDA
+    pub token_config: AccountInfo<'info>,
+
+    /// CHECK: Metaplex metadata PDA
     #[account(mut)]
     pub metadata: UncheckedAccount<'info>,
 
@@ -352,41 +539,33 @@ pub struct CreateTokenMint<'info> {
 
     pub system_program: Program<'info, System>,
     pub token_program: Interface<'info, TokenInterface>,
-    /// CHECK: Metaplex metadata program (optional for localnet)
+    /// CHECK: Metaplex metadata program
     pub metadata_program: UncheckedAccount<'info>,
-    pub rent: Sysvar<'info, Rent>,
-    /// CHECK: Sysvar instructions account for Metaplex validation
+    /// CHECK: Sysvar instructions
     #[account(address = anchor_lang::solana_program::sysvar::instructions::ID)]
     pub sysvar_instructions: UncheckedAccount<'info>,
 }
 
 #[derive(Accounts)]
-pub struct MintToWallet<'info> {
-    #[account(
-        mut,
-        constraint = mint.key() == token_info.load()?.mint @ EnergyTokenError::UnauthorizedAuthority,
-    )]
-    pub mint: InterfaceAccount<'info, MintInterface>,
+pub struct MintGrid<'info> {
+    #[account(mut)]
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
 
-    #[account(
-        seeds = [b"token_info_2022"],
-        bump,
-        constraint = token_info.load()?.authority == authority.key() @ EnergyTokenError::UnauthorizedAuthority,
-    )]
-    pub token_info: AccountLoader<'info, TokenInfo>,
+    pub token_config: Account<'info, TokenConfig>,
 
     #[account(
         mut,
-        token::mint = mint,
-        token::authority = destination_owner,
         token::token_program = token_program,
     )]
     pub destination: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    /// CHECK: The owner of the destination token account
+    /// CHECK: Recipient owner
     pub destination_owner: AccountInfo<'info>,
 
     pub authority: Signer<'info>,
+
+    /// CHECK: REC Validator co-signer (required when validators are registered)
+    pub rec_validator: Signer<'info>,
 
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -397,52 +576,21 @@ pub struct MintToWallet<'info> {
 }
 
 #[derive(Accounts)]
-pub struct InitializeToken<'info> {
+pub struct TransferGrid<'info> {
     #[account(
-        init,
-        payer = authority,
-        space = 8 + std::mem::size_of::<TokenInfo>(),
-        seeds = [b"token_info_2022"],
-        bump
+        mut,
+        token::token_program = token_program,
     )]
-    pub token_info: AccountLoader<'info, TokenInfo>,
-
-    #[account(
-        init,
-        payer = authority,
-        seeds = [b"mint_2022"],
-        bump,
-        mint::decimals = DECIMALS,
-        mint::authority = token_info,
-        mint::token_program = token_program,
-    )]
-    pub mint: InterfaceAccount<'info, MintInterface>,
-
-    #[account(mut)]
-    pub authority: Signer<'info>,
-
-    pub system_program: Program<'info, System>,
-    pub token_program: Interface<'info, TokenInterface>,
-    pub rent: Sysvar<'info, Rent>,
-}
-
-#[derive(Accounts)]
-pub struct AddRecValidator<'info> {
-    #[account(mut, has_one = authority @ EnergyTokenError::UnauthorizedAuthority)]
-    pub token_info: AccountLoader<'info, TokenInfo>,
-
-    pub authority: Signer<'info>,
-}
-
-#[derive(Accounts)]
-pub struct TransferTokens<'info> {
-    #[account(mut)]
     pub from_token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    #[account(mut)]
+    #[account(
+        mut,
+        token::token_program = token_program,
+    )]
     pub to_token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
-    pub mint: InterfaceAccount<'info, MintInterface>,
+    #[account(mut)]
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
 
     pub from_authority: Signer<'info>,
 
@@ -450,12 +598,37 @@ pub struct TransferTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct BurnTokens<'info> {
-    #[account(mut)]
-    pub mint: InterfaceAccount<'info, MintInterface>,
+pub struct SwapGridToGrx<'info> {
+    pub token_config: Account<'info, TokenConfig>,
 
     #[account(mut)]
-    pub token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub grid_from: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    #[account(mut)]
+    pub grx_to: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+
+    /// CHECK: User who owns GRID and receives GRX
+    #[account(mut)]
+    pub user: Signer<'info>,
+
+    pub token_program: Interface<'info, TokenInterface>,
+}
+
+#[derive(Accounts)]
+pub struct BurnGrx<'info> {
+    #[account(mut)]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
+
+    pub token_config: Account<'info, TokenConfig>,
+
+    #[account(mut)]
+    pub grx_from: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     pub authority: Signer<'info>,
 
@@ -463,50 +636,44 @@ pub struct BurnTokens<'info> {
 }
 
 #[derive(Accounts)]
-pub struct MintTokensDirect<'info> {
-    /// Global config — read-only, no write lock for Sealevel parallelism
+pub struct TransferGrx<'info> {
     #[account(
-        seeds = [b"token_info_2022"],
-        bump
+        mut,
+        token::token_program = token_program,
     )]
-    pub token_info: AccountLoader<'info, TokenInfo>,
+    pub from_token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(
         mut,
-        constraint = mint.key() == token_info.load()?.mint @ EnergyTokenError::UnauthorizedAuthority,
+        token::token_program = token_program,
     )]
-    pub mint: InterfaceAccount<'info, MintInterface>,
+    pub to_token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
 
     #[account(mut)]
-    pub user_token_account: Box<InterfaceAccount<'info, TokenAccountInterface>>,
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
 
-    pub authority: Signer<'info>,
-
-    /// CHECK: Validated against stored registry_authority in TokenInfo
-    #[account(
-        constraint = registry_authority.key() == token_info.load()?.registry_authority @ EnergyTokenError::UnauthorizedAuthority
-    )]
-    pub registry_authority: UncheckedAccount<'info>,
-
-    /// REC Validator co-signer — must be in token_info.rec_validators when count > 0
-    pub rec_validator: Signer<'info>,
+    pub from_authority: Signer<'info>,
 
     pub token_program: Interface<'info, TokenInterface>,
 }
 
 #[derive(Accounts)]
-pub struct SyncTotalSupply<'info> {
-    #[account(
-        mut,
-        seeds = [b"token_info_2022"],
-        bump
-    )]
-    pub token_info: AccountLoader<'info, TokenInfo>,
+pub struct AddRecValidator<'info> {
+    #[account(mut)]
+    pub token_config: Account<'info, TokenConfig>,
 
-    #[account(
-        constraint = mint.key() == token_info.load()?.mint @ EnergyTokenError::UnauthorizedAuthority,
-    )]
-    pub mint: InterfaceAccount<'info, MintInterface>,
+    pub authority: Signer<'info>,
+}
+
+#[derive(Accounts)]
+pub struct SyncSupplies<'info> {
+    pub token_config: Account<'info, TokenConfig>,
+
+    #[account(mut)]
+    pub grid_mint: InterfaceAccount<'info, MintInterface>,
+
+    #[account(mut)]
+    pub grx_mint: InterfaceAccount<'info, MintInterface>,
 
     pub authority: Signer<'info>,
 }

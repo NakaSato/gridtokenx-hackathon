@@ -4,7 +4,7 @@ use crate::ShardedMatchOrdersContext;
 
 pub fn sharded_match_orders(ctx: Context<ShardedMatchOrdersContext>, match_amount: u64, _shard_id: u8) -> Result<()> {
     require!(
-        ctx.accounts.governance_config.is_operational(),
+        ctx.accounts.trading_config.is_operational(),
         crate::error::TradingError::MaintenanceMode
     );
 

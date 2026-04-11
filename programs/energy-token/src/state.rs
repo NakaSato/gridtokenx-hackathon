@@ -1,35 +1,32 @@
-// Energy-token program state
-
 use anchor_lang::prelude::*;
 
-/// Token program configuration and state
-#[account(zero_copy)]
-#[repr(C)]
-pub struct TokenInfo {
-    pub authority: Pubkey,           // 32
-    pub registry_authority: Pubkey,  // 32
-    pub registry_program: Pubkey,    // 32
-    pub mint: Pubkey,                // 32
-    pub total_supply: u64,           // 8
-    pub created_at: i64,             // 8
-    pub rec_validators: [Pubkey; 5], // 32 * 5 = 160
-    pub rec_validators_count: u8,    // 1
-    pub _padding: [u8; 7],           // 7
+/// TokenConfig PDA — stores configuration for both GRID and GRX tokens
+/// seeds: [b"token_config"]
+#[account]
+pub struct TokenConfig {
+    pub authority: Pubkey,
+    pub registry_program: Pubkey,
+    pub registry_authority: Pubkey,
+    pub grid_mint: Pubkey,
+    pub grx_mint: Pubkey,
+    pub grx_initial_supply: u64,
+    pub grx_total_burned: u64,
+    pub created_at: i64,
 }
 
-/// Meter reading record stored on-chain
+/// MeterReading — stored reading data (not actively used in instructions)
 #[account(zero_copy)]
 #[repr(C)]
 pub struct MeterReading {
-    pub meter_owner: Pubkey,       // 32
-    pub meter_serial: [u8; 32],    // 32 (replaced String)
-    pub energy_generated_kwh: u64, // 8
-    pub energy_consumed_kwh: u64,  // 8
-    pub timestamp: i64,            // 8
-    pub voltage: u16,              // 2
-    pub current: u16,              // 2
-    pub power_factor: u16,         // 2
-    pub temperature: i16,          // 2
-    pub bump: u8,                  // 1
-    pub _padding: [u8; 7],         // 7 (total: 32+32+8+8+8+2+2+2+2+1+7 = 104)
+    pub meter_owner: Pubkey,
+    pub meter_serial: [u8; 32],
+    pub energy_generated_kwh: u64,
+    pub energy_consumed_kwh: u64,
+    pub timestamp: i64,
+    pub voltage: u16,
+    pub current: u16,
+    pub power_factor: u16,
+    pub temperature: i16,
+    pub bump: u8,
+    pub _padding: [u8; 7],
 }

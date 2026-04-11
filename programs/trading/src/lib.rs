@@ -11,9 +11,9 @@ pub use crate::error::TradingError;
 pub use crate::instructions::*;
 pub use crate::state::{
     BatchConfig, BatchInfo, Market, MarketShard, Order, OrderNullifier, OrderStatus, OrderType,
-    PriceLevel, PricePoint, TradeRecord, ZoneMarket, ZoneMarketShard, MAX_DEPTH_LEVELS,
+    PriceLevel, PricePoint, TradeRecord, TradingConfig, ZoneMarket, ZoneMarketShard, MAX_DEPTH_LEVELS,
 };
-pub use governance::{ErcCertificate, ErcStatus, PoAConfig};
+
 
 // ============================================================================
 // AUCTION CLEARING TYPES (Inlined to avoid Anchor macro issues)
@@ -73,6 +73,27 @@ pub mod trading {
 
     pub fn initialize_program(_ctx: Context<InitializeProgram>) -> Result<()> {
         msg!("Program Initialized");
+        Ok(())
+    }
+
+    /// Initialize trading configuration
+    pub fn initialize_config(ctx: Context<InitializeConfig>) -> Result<()> {
+        let clock = Clock::get()?;
+        let config = &mut ctx.accounts.trading_config;
+        config.authority = ctx.accounts.authority.key();
+        config.maintenance_mode = false;
+        config.market = Pubkey::default();
+        config.created_at = clock.unix_timestamp;
+        config.updated_at = clock.unix_timestamp;
+        config.total_trades = 0;
+        config.total_volume = 0;
+        Ok(())
+    }
+
+    /// Update maintenance mode (admin only)
+    pub fn update_maintenance_mode(ctx: Context<UpdateMaintenanceMode>, enabled: bool) -> Result<()> {
+        ctx.accounts.trading_config.maintenance_mode = enabled;
+        ctx.accounts.trading_config.updated_at = Clock::get()?.unix_timestamp;
         Ok(())
     }
 
@@ -149,7 +170,7 @@ pub mod trading {
         price_per_kwh: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         require!(energy_amount > 0, TradingError::InvalidAmount);
@@ -169,27 +190,8 @@ pub mod trading {
             }
         }
 
-        // Single Clock::get() syscall hoisted before the ERC block — avoids a second
-        // syscall when an ERC certificate is present (previously called twice).
+        // Single Clock::get() syscall hoisted before order creation
         let clock = Clock::get()?;
-
-        if let Some(erc) = &ctx.accounts.erc_certificate {
-            require!(
-                erc.status == ErcStatus::Valid,
-                TradingError::InvalidErcCertificate
-            );
-            if let Some(expires_at) = erc.expires_at {
-                require!(clock.unix_timestamp < expires_at, TradingError::ErcExpired);
-            }
-            require!(
-                erc.validated_for_trading,
-                TradingError::NotValidatedForTrading
-            );
-            require!(
-                energy_amount <= erc.energy_amount,
-                TradingError::ExceedsErcAmount
-            );
-        }
 
         // No redundant market load — price bounds already checked above.
         let mut zone_market = ctx.accounts.zone_market.load_mut()?;
@@ -224,7 +226,7 @@ pub mod trading {
         max_price_per_kwh: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         require!(energy_amount > 0, TradingError::InvalidAmount);
@@ -273,7 +275,7 @@ pub mod trading {
 
     pub fn match_orders(ctx: Context<MatchOrdersContext>, match_amount: u64) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         require!(match_amount > 0, TradingError::InvalidAmount);
@@ -362,7 +364,7 @@ pub mod trading {
 
     pub fn cancel_order(ctx: Context<CancelOrderContext>) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         let _market = ctx.accounts.market.load()?;
@@ -398,7 +400,7 @@ pub mod trading {
 
     pub fn add_order_to_batch(ctx: Context<AddOrderToBatchContext>) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -470,7 +472,7 @@ pub mod trading {
         match_pairs: Vec<MatchPair>,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -537,7 +539,7 @@ pub mod trading {
         price: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         require!(amount > 0, TradingError::InvalidAmount);
@@ -639,7 +641,7 @@ pub mod trading {
         amount: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         require!(amount > 0, TradingError::InvalidAmount);
@@ -683,7 +685,7 @@ pub mod trading {
         sell_amounts: Vec<u64>,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -769,7 +771,7 @@ pub mod trading {
         trade_volume: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -822,7 +824,7 @@ pub mod trading {
 
     pub fn cancel_batch(ctx: Context<CancelBatchContext>) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -867,7 +869,7 @@ pub mod trading {
         buy_orders: Vec<AuctionOrder>,
     ) -> Result<ClearAuctionResult> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -1019,7 +1021,7 @@ pub mod trading {
         clearing_price: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
 
@@ -1068,7 +1070,7 @@ pub mod trading {
         loss_cost_val: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         let mut market = ctx.accounts.market.load_mut()?;
@@ -1229,7 +1231,7 @@ pub mod trading {
         max_price: u64,
     ) -> Result<()> {
         require!(
-            ctx.accounts.governance_config.is_operational(),
+            ctx.accounts.trading_config.is_operational(),
             TradingError::MaintenanceMode
         );
         let mut market = ctx.accounts.market.load_mut()?;
@@ -1295,6 +1297,30 @@ pub mod trading {
     }
 
     #[derive(Accounts)]
+    pub struct InitializeConfig<'info> {
+        #[account(
+            init,
+            payer = authority,
+            space = 8 + TradingConfig::LEN,
+            seeds = [b"trading_config"],
+            bump
+        )]
+        pub trading_config: Account<'info, TradingConfig>,
+
+        #[account(mut)]
+        pub authority: Signer<'info>,
+
+        pub system_program: Program<'info, System>,
+    }
+
+    #[derive(Accounts)]
+    pub struct UpdateMaintenanceMode<'info> {
+        #[account(mut, has_one = authority)]
+        pub trading_config: Account<'info, TradingConfig>,
+        pub authority: Signer<'info>,
+    }
+
+    #[derive(Accounts)]
     pub struct InitializeMarketContext<'info> {
         #[account(init, payer = authority, space = 8 + std::mem::size_of::<Market>(), seeds = [b"market"], bump)]
         pub market: AccountLoader<'info, Market>,
@@ -1322,11 +1348,10 @@ pub mod trading {
         pub zone_market: AccountLoader<'info, ZoneMarket>,
         #[account(init, payer = authority, space = 8 + std::mem::size_of::<Order>(), seeds = [b"order", authority.key().as_ref(), &order_id_val.to_le_bytes()], bump)]
         pub order: AccountLoader<'info, Order>,
-        pub erc_certificate: Option<Box<Account<'info, ErcCertificate>>>,
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1340,7 +1365,7 @@ pub mod trading {
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1357,7 +1382,7 @@ pub mod trading {
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1378,7 +1403,7 @@ pub mod trading {
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1390,7 +1415,7 @@ pub mod trading {
         pub order: AccountLoader<'info, Order>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1404,7 +1429,7 @@ pub mod trading {
         /// CHECK: Buyer's token account for currency (Escrow)
         #[account(mut)]
         pub buyer_currency_escrow: AccountInfo<'info>,
-        /// CHECK: Seller's token account for energy (Escrow)
+        /// CHECK: Seller's token account for GRID (Escrow)
         #[account(mut)]
         pub seller_energy_escrow: AccountInfo<'info>,
         /// CHECK: Seller's token account for currency (receiver)
@@ -1429,7 +1454,7 @@ pub mod trading {
         pub token_program: Interface<'info, anchor_spl::token_interface::TokenInterface>,
         pub system_program: Program<'info, System>,
         pub secondary_token_program: Interface<'info, anchor_spl::token_interface::TokenInterface>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1437,7 +1462,7 @@ pub mod trading {
         #[account(mut, has_one = authority)]
         pub market: AccountLoader<'info, Market>,
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1447,7 +1472,7 @@ pub mod trading {
         pub order: AccountLoader<'info, Order>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1456,7 +1481,7 @@ pub mod trading {
         pub market: AccountLoader<'info, Market>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1465,7 +1490,7 @@ pub mod trading {
         pub market: AccountLoader<'info, Market>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1480,7 +1505,7 @@ pub mod trading {
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1493,7 +1518,7 @@ pub mod trading {
         #[account(mut)]
         pub authority: Signer<'info>,
         pub system_program: Program<'info, System>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1503,7 +1528,7 @@ pub mod trading {
         pub zone_market: AccountLoader<'info, ZoneMarket>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1514,7 +1539,7 @@ pub mod trading {
         pub zone_market: AccountLoader<'info, ZoneMarket>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     #[derive(Accounts)]
@@ -1523,7 +1548,7 @@ pub mod trading {
         pub market: AccountLoader<'info, Market>,
         #[account(mut)]
         pub authority: Signer<'info>,
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 
     // ========================================================================
@@ -1549,7 +1574,7 @@ pub mod trading {
         /// CHECK: Token program for transfers
         pub token_program: AccountInfo<'info>,
 
-        pub governance_config: Account<'info, PoAConfig>,
+        pub trading_config: Account<'info, TradingConfig>,
     }
 }
 

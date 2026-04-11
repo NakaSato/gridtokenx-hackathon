@@ -15,9 +15,6 @@ pub use state::*;
 
 declare_id!("C5HLtbZHgwVU2oMirgd9f62Zeig7hZFKyJuB9AqVcsn6");
 
-/// Airdrop amount for new users (in smallest token units, 9 decimals = 20 GRX)
-pub const AIRDROP_AMOUNT: u64 = 20_000_000_000; // 20 GRX tokens
-
 #[cfg(feature = "localnet")]
 use compute_debug::{compute_checkpoint, compute_fn};
 
@@ -141,7 +138,7 @@ pub mod registry {
     }
 
     /// Register a new user in the P2P energy trading system
-    /// Also automatically distributes airdrop amount of GRID tokens to the user
+    /// No airdrop — users earn GRID through verified energy trades
     pub fn register_user(
         ctx: Context<RegisterUser>,
         user_type: UserType,
@@ -165,6 +162,9 @@ pub mod registry {
             user_account.shard_id = shard_id;
             user_account.registered_at = Clock::get()?.unix_timestamp;
             user_account.meter_count = 0;
+            user_account.staked_grx = 0;
+            user_account.last_stake_at = 0;
+            user_account.validator_status = ValidatorStatus::None;
 
             shard.user_count += 1;
 
@@ -175,34 +175,6 @@ pub mod registry {
                 long_e7,
                 h3_index,
             });
-
-            // Perform automatic airdrop via CPI to energy token program
-            // Only proceed if energy token program is provided (optional)
-            if ctx.accounts.energy_token_program.key() != Pubkey::default() {
-                compute_checkpoint!("before_airdrop_cpi");
-
-                // Build CPI context for MintToWallet instruction
-                let cpi_accounts = token_interface::MintTo {
-                    mint: ctx.accounts.mint.to_account_info(),
-                    to: ctx.accounts.user_token_account.to_account_info(),
-                    authority: ctx.accounts.token_info.to_account_info(),
-                };
-
-                let cpi_program = ctx.accounts.token_program.to_account_info();
-
-                // Use empty signer seeds since token_info is already an authority signer
-                // The energy-token program will validate the authority signature
-                let cpi_ctx = CpiContext::new(cpi_program, cpi_accounts);
-
-                // Call mint_to from the SPL token interface
-                if token_interface::mint_to(cpi_ctx, AIRDROP_AMOUNT).is_err() {
-                    // Airdrop failure is non-critical, user registration continues
-                    // This allows registration to succeed even if token minting fails
-                    msg!("Warning: Airdrop minting failed for user {}, but registration succeeded", user_authority);
-                }
-
-                compute_checkpoint!("after_airdrop_cpi");
-            }
         });
         Ok(())
     }
@@ -455,7 +427,14 @@ pub mod registry {
                 .total_generation
                 .saturating_sub(meter.total_consumption);
 
-            let new_tokens_to_mint = current_net_gen.saturating_sub(meter.settled_net_generation);
+            let unsettled_wh = current_net_gen.saturating_sub(meter.settled_net_generation);
+
+            // Convert watt-hours to GRID token units (9 decimals)
+            // 1 Wh × 1,000,000 = 1,000,000 raw → 0.001 GRID
+            // 1,000 Wh (1 kWh) × 1,000,000 = 1,000,000,000 → 1.000 GRID
+            const WH_TO_GRID_SCALE: u64 = 1_000_000;
+            let new_tokens_to_mint = unsettled_wh.checked_mul(WH_TO_GRID_SCALE)
+                .unwrap_or(u64::MAX);
 
             require!(new_tokens_to_mint > 0, RegistryError::NoUnsettledBalance);
 
@@ -464,6 +443,7 @@ pub mod registry {
             emit!(MeterBalanceSettled {
                 meter_id: bytes32_to_string(&meter.meter_id),
                 owner: meter.owner,
+                energy_wh: unsettled_wh,
                 tokens_to_mint: new_tokens_to_mint,
                 total_settled: current_net_gen,
             });
@@ -475,7 +455,8 @@ pub mod registry {
     }
 
     /// Settle meter balance and automatically mint GRID tokens via CPI
-    /// This is a convenience function that combines settlement + minting in one transaction
+    /// This combines settlement + minting in one transaction
+    /// GRID tokens are minted 1:1 with verified kWh (1 GRID = 1 kWh)
     pub fn settle_and_mint_tokens(ctx: Context<SettleAndMintTokens>) -> Result<()> {
         compute_fn!("settle_and_mint_tokens" => {
             let mut meter = ctx.accounts.meter_account.load_mut()?;
@@ -495,7 +476,14 @@ pub mod registry {
                 .total_generation
                 .saturating_sub(meter.total_consumption);
 
-            let new_tokens_to_mint = current_net_gen.saturating_sub(meter.settled_net_generation);
+            let unsettled_wh = current_net_gen.saturating_sub(meter.settled_net_generation);
+
+            // Convert watt-hours to GRID token units (9 decimals)
+            // 1 Wh × 1,000,000 = 1,000,000 raw → 0.001 GRID
+            // 1,000 Wh (1 kWh) × 1,000,000 = 1,000,000,000 → 1.000 GRID
+            const WH_TO_GRID_SCALE: u64 = 1_000_000;
+            let new_tokens_to_mint = unsettled_wh.checked_mul(WH_TO_GRID_SCALE)
+                .unwrap_or(u64::MAX);
 
             require!(new_tokens_to_mint > 0, RegistryError::NoUnsettledBalance);
 
@@ -504,11 +492,12 @@ pub mod registry {
             emit!(MeterBalanceSettled {
                 meter_id: bytes32_to_string(&meter.meter_id),
                 owner: meter.owner,
+                energy_wh: unsettled_wh,
                 tokens_to_mint: new_tokens_to_mint,
                 total_settled: current_net_gen,
             });
 
-            // We need to sign as the Registry because the Registry is the authority of the Energy Token (TokenInfo)
+            // Registry PDA signs as the authority for energy-token CPI
             let bump = ctx.bumps.registry;
             let signer_seeds = &[
                 b"registry".as_ref(),
@@ -517,18 +506,29 @@ pub mod registry {
             let signer = &[&signer_seeds[..]];
 
             let cpi_program = ctx.accounts.energy_token_program.to_account_info();
-            let cpi_accounts = energy_token::cpi::accounts::MintTokensDirect {
-                token_info: ctx.accounts.token_info.to_account_info(),
-                mint: ctx.accounts.mint.to_account_info(),
-                user_token_account: ctx.accounts.user_token_account.to_account_info(),
-                authority: ctx.accounts.registry.to_account_info(), // Registry signs
-                registry_authority: ctx.accounts.registry.to_account_info(),
+            let cpi_accounts = energy_token::cpi::accounts::MintGrid {
+                grid_mint: ctx.accounts.grid_mint.to_account_info(),
+                token_config: ctx.accounts.token_config.to_account_info(),
+                destination: ctx.accounts.user_token_account.to_account_info(),
+                destination_owner: ctx.accounts.meter_owner.to_account_info(),
+                authority: ctx.accounts.registry.to_account_info(),
                 rec_validator: ctx.accounts.rec_validator.to_account_info(),
+                payer: ctx.accounts.meter_owner.to_account_info(),
                 token_program: ctx.accounts.token_program.to_account_info(),
+                associated_token_program: ctx.accounts.associated_token_program.to_account_info(),
+                system_program: ctx.accounts.system_program.to_account_info(),
             };
 
             let cpi_ctx = CpiContext::new_with_signer(cpi_program, cpi_accounts, signer);
-            energy_token::cpi::mint_tokens_direct(cpi_ctx, new_tokens_to_mint)?;
+
+            // Compute token_config bump (seeds: [b"token_config"])
+            let (_pda, bump) = Pubkey::find_program_address(
+                &[b"token_config"],
+                &ctx.accounts.energy_token_program.key(),
+            );
+            let _ = _pda; // suppress unused variable warning
+
+            energy_token::cpi::mint_grid(cpi_ctx, new_tokens_to_mint, bump)?;
         });
 
         Ok(())
@@ -668,32 +668,7 @@ pub struct RegisterUser<'info> {
     pub registry_shard: AccountLoader<'info, RegistryShard>,
 
     #[account(mut)]
-    pub registry: AccountLoader<'info, Registry>,
-
-    #[account(mut)]
     pub authority: Signer<'info>,
-
-    // ===== Optional Airdrop Accounts =====
-    /// CHECK: Energy token program (optional for airdrop)
-    pub energy_token_program: AccountInfo<'info>,
-
-    /// CHECK: Energy token mint account (optional for airdrop)
-    #[account(mut)]
-    pub mint: AccountInfo<'info>,
-
-    /// CHECK: Energy token info PDA account (optional for airdrop)
-    #[account(mut)]
-    pub token_info: AccountInfo<'info>,
-
-    /// CHECK: User's associated token account for receiving airdrop, validated by token program
-    #[account(mut)]
-    pub user_token_account: AccountInfo<'info>,
-
-    /// CHECK: SPL Token program (Token-2022 compatible), validated by runtime
-    pub token_program: AccountInfo<'info>,
-
-    /// Associated Token Program
-    pub associated_token_program: Program<'info, AssociatedToken>,
 
     pub system_program: Program<'info, System>,
 }
@@ -829,36 +804,38 @@ pub struct SettleAndMintTokens<'info> {
 
     pub meter_owner: Signer<'info>,
 
-    /// CHECK: Energy token program's token_info PDA
+    /// Energy token program's GRID mint
     #[account(mut)]
-    pub token_info: AccountInfo<'info>,
+    pub grid_mint: AccountInfo<'info>,
 
-    /// CHECK: Energy token mint account
-    #[account(mut)]
-    pub mint: AccountInfo<'info>,
+    /// Energy token program's TokenConfig PDA
+    pub token_config: AccountInfo<'info>,
 
-    /// CHECK: User's token account for receiving minted tokens
+    /// CHECK: User's token account for receiving minted GRID tokens
     #[account(mut)]
     pub user_token_account: AccountInfo<'info>,
 
-    /// CHECK: Authority that can mint tokens (usually program authority)
-    /// We use the Registry account itself as the authority signer
+    /// Registry PDA — signs as the authority for energy-token CPI
     #[account(
-        mut,
         seeds = [b"registry"],
         bump
     )]
     pub registry: AccountLoader<'info, Registry>,
 
     /// The energy token program
-    /// CHECK: This is validated by the CPI call
+    /// CHECK: Validated by CPI call
     pub energy_token_program: AccountInfo<'info>,
 
-    /// CHECK: SPL Token program
+    /// SPL Token program
     pub token_program: AccountInfo<'info>,
 
-    /// CHECK: REC Validator co-signer (required when validators are registered in token_info)
-    /// For registry->energy_token CPI, this can be the meter_owner or a separate validator
+    /// Associated Token program (for creating ATA if needed)
+    pub associated_token_program: AccountInfo<'info>,
+
+    /// System program
+    pub system_program: AccountInfo<'info>,
+
+    /// CHECK: REC Validator co-signer (required when validators are registered)
     pub rec_validator: AccountInfo<'info>,
 }
 #[derive(Accounts)]

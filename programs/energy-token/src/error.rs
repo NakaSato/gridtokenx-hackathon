@@ -1,25 +1,19 @@
-// Energy-token program error codes
-
 use anchor_lang::prelude::*;
 
 #[error_code]
 pub enum EnergyTokenError {
-    #[msg("Unauthorized authority")]
+    #[msg("Caller is not authorized to perform this action")]
     UnauthorizedAuthority,
-    #[msg("Invalid meter")]
-    InvalidMeter,
-    #[msg("Insufficient token balance")]
-    InsufficientBalance,
-    #[msg("Invalid metadata account")]
-    InvalidMetadataAccount,
-    #[msg("No unsettled balance")]
-    NoUnsettledBalance,
-    #[msg("Unauthorized registry program")]
-    UnauthorizedRegistry,
-    #[msg("Validator already exists in the list")]
-    ValidatorAlreadyExists,
-    #[msg("Maximum number of validators reached")]
-    MaxValidatorsReached,
-    #[msg("REC validator not found in the registered list")]
+    #[msg("REC validator not found in registered list")]
     RecValidatorNotFound,
+    #[msg("REC validator already exists")]
+    ValidatorAlreadyExists,
+    #[msg("Maximum number of validators (5) reached")]
+    MaxValidatorsReached,
+    #[msg("Mathematical overflow detected")]
+    MathOverflow,
+    #[msg("Invalid metadata account provided")]
+    InvalidMetadataAccount,
+    #[msg("Insufficient token balance for operation")]
+    InsufficientBalance,
 }

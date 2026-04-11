@@ -47,10 +47,10 @@ pub struct SettleOffchainMatchContext<'info> {
     /// CHECK: Seller currency token account
     #[account(mut)]
     pub seller_currency_account: UncheckedAccount<'info>,
-    /// CHECK: Seller energy token account
+    /// CHECK: Seller GRID token account
     #[account(mut)]
     pub seller_energy_account: UncheckedAccount<'info>,
-    /// CHECK: Buyer energy token account
+    /// CHECK: Buyer GRID token account
     #[account(mut)]
     pub buyer_energy_account: UncheckedAccount<'info>,
 
